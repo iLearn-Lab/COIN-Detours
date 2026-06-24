@@ -14,6 +14,7 @@ This repository contains the minimal code release for composed video retrieval t
 - `Retrieval/config.py`: default paths and hyperparameters
 - `Retrieval/scripts/run_train.sh`, `Retrieval/scripts/run_test.sh`: launch scripts
 - `Retrieval/COIN_testing_videos_filtered.txt`: default evaluation video pool list
+- `dataset/COIN_train.json`, `dataset/COIN_val.json`, `dataset/COIN_test.json`: localization data splits
 
 ## Setup
 
