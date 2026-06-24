@@ -32,7 +32,7 @@
 #                             --lr 2e-5 --max_epochs 30 --exp_name stage2_hardneg
 
 set -e
-cd "$(dirname "${BASH_SOURCE[0]}")"
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 CONDA_PYTHON="/home/wenan/.conda/envs/tfcovr/bin/python"
 TORCHRUN="/home/wenan/.conda/envs/tfcovr/bin/torchrun"
