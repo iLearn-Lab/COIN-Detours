@@ -17,43 +17,24 @@ from packaging import version
 from PIL import Image
 from torchvision import io, transforms
 from torchvision.transforms import InterpolationMode
-# import cv2
 import decord
 import random
 logger = logging.getLogger(__name__)
 
-# IMAGE_FACTOR = 28
-# MIN_PIXELS = 4 * 28 * 28
-# MAX_PIXELS = 16384 * 28 * 28
-# MAX_RATIO = 200
-
-# VIDEO_MIN_PIXELS = 128 * 28 * 28
-# VIDEO_MAX_PIXELS = 768 * 28 * 28
-# FRAME_FACTOR = 2
-# FPS = 2.0
-# FPS_MIN_FRAMES = 4
-# FPS_MAX_FRAMES = 128 * 2
-# VIDEO_TOTAL_PIXELS = 1024 * 16 * 28 * 28
-# MAX_FRAMES = 1024
-
-
-#============================
 IMAGE_FACTOR = 28
-MIN_PIXELS = 2 * 28 * 28        # 图像最小缩放尺寸（小）
-MAX_PIXELS = 2048 * 28 * 28     # 降低图像最大像素限制   
+MIN_PIXELS = 2 * 28 * 28
+MAX_PIXELS = 2048 * 28 * 28
 
-MAX_RATIO = 150                 # 不强改，但可以略减
+MAX_RATIO = 150
 
-VIDEO_MIN_PIXELS = 64 * 28 * 28  # 每帧下限
-VIDEO_MAX_PIXELS = 256 * 28 * 28 # 每帧上限（原来是 768）
+VIDEO_MIN_PIXELS = 64 * 28 * 28
+VIDEO_MAX_PIXELS = 256 * 28 * 28
 FRAME_FACTOR = 2
-FPS = 1                       # 降采样帧率
+FPS = 1
 FPS_MIN_FRAMES = 4
-FPS_MAX_FRAMES = 64              # 降到一半
-
-VIDEO_TOTAL_PIXELS = 128 * 16 * 28 * 28  # 从 1024*16 → 512*16，减半
-MAX_FRAMES = 256                         # 从 1024 → 512
-#============================
+FPS_MAX_FRAMES = 64
+VIDEO_TOTAL_PIXELS = 128 * 16 * 28 * 28
+MAX_FRAMES = 256
 
 def round_by_factor(number: int, factor: int) -> int:
     """Returns the closest integer to 'number' that is divisible by 'factor'."""
@@ -97,7 +78,6 @@ def smart_resize(
 
 
 def fetch_image(ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACTOR) -> Image.Image:
-    # import ipdb;ipdb.set_trace()
     if "image" in ele:
         image = ele["image"]
     else:
@@ -119,7 +99,6 @@ def fetch_image(ele: dict[str, str | Image.Image], size_factor: int = IMAGE_FACT
     if image_obj is None:
         raise ValueError(f"Unrecognized image input, support local path, http url, base64 and PIL.Image, got {image}")
     image = image_obj.convert("RGB")
-    ## resize
     if "resized_height" in ele and "resized_width" in ele:
         resized_height, resized_width = smart_resize(
             ele["resized_height"],
@@ -201,9 +180,9 @@ def _read_video_decord(
     total_frames, video_fps = len(vr), vr.get_avg_fps()
 
     video_start = ele.get("video_start", 0)
-    video_end = ele.get("video_end", (total_frames - 1) / video_fps)  
+    video_end = ele.get("video_end", (total_frames - 1) / video_fps)
 
-    
+
     start_frame = int(video_start * video_fps)
     end_frame = int(video_end * video_fps)
     start_frame_idx = max(0, start_frame)
@@ -233,7 +212,7 @@ def get_video_reader_backend() -> str:
 
 def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR) -> torch.Tensor | list[Image.Image]:
     if isinstance(ele["video"], str):
-        
+
         video_reader_backend = get_video_reader_backend()
         vr, nframes_2fps, start_frame_idx, end_frame_idx = VIDEO_READER_BACKENDS[video_reader_backend](ele)
         total_frames, video_fps = len(vr), vr.get_avg_fps()
@@ -264,7 +243,7 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR) -> torch.Tensor | l
                     feature_sample_idx = torch.linspace(start_closest_idx, end_closest_idx, int(MAX_FRAMES * sample_fps / 2)).round().long().tolist()
                 else:
                     feature_sample_idx = list(range(start_closest_idx, end_closest_idx+1))
-            
+
             idx = [fps_sample_feature_frame_idx[i] for i in feature_sample_idx]
             sampled_timestamps = [round(i.item() / video_fps, 1) for i in idx]
             feature = feature[feature_sample_idx]
@@ -295,14 +274,8 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR) -> torch.Tensor | l
             nframes = total_pixels // (resized_height * resized_width) * FRAME_FACTOR
             nframes = floor_by_factor(nframes, FRAME_FACTOR)
 
-            # shichang = (end_frame_idx-start_frame_idx)/video_fps
-            # shichang = shichang*2
-            # if nframes > shichang:
-            #     nframes = int(shichang)
-            
             idx = torch.linspace(start_frame_idx, end_frame_idx, nframes).round().long().tolist()
 
-            #==================
             try:
                 video = vr.get_batch(idx).asnumpy()
             except IndexError:
@@ -315,8 +288,6 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR) -> torch.Tensor | l
                     idx = safe_idx
                 except IndexError as exc:
                     raise IndexError(f"Failed to read video frames for {ele['video']}") from exc
-            #==================
-            # video = vr.get_batch(idx).asnumpy()
             video = torch.tensor(video).permute(0, 3, 1, 2)
             sampled_timestamps = [round(i/video_fps, 1) for i in idx]
 
@@ -344,14 +315,14 @@ def fetch_video(ele: dict, image_factor: int = IMAGE_FACTOR) -> torch.Tensor | l
         if len(images) < nframes:
             images.extend([images[-1]] * (nframes - len(images)))
         return images
-    
+
 def generate_clip_lengths(t, clip_length):
     full_clips = t // clip_length
     remainder = t % clip_length
     result = [clip_length] * full_clips
     if remainder > 0:
         result.append(remainder)
-    
+
     return result
 
 def combine_timestamps(feature, sampled_timestamps, num_clips=32, clip_length=-1):
@@ -359,7 +330,7 @@ def combine_timestamps(feature, sampled_timestamps, num_clips=32, clip_length=-1
     assert len(sampled_timestamps) == T
     if clip_length == -1:
         clip_length = T // num_clips
-        
+
     sampled_timestamps_combine = sampled_timestamps[::int(clip_length)]
     combine_t_list = generate_clip_lengths(feature.shape[0], clip_length)
 
@@ -387,7 +358,6 @@ def process_vision_info(
     conversations: list[dict] | list[list[dict]],
 ) -> tuple[list[Image.Image] | None, list[torch.Tensor | list[Image.Image]] | None]:
     vision_infos = extract_vision_info(conversations)
-    ## Read images or videos
     image_inputs = []
     video_inputs = []
     sampled_timestamps_list = []

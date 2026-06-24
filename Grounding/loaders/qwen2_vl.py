@@ -14,12 +14,12 @@ class Qwen2VLModelLoader(BaseModelLoader):
                 model = Qwen2VLMRForConditionalGeneration.from_pretrained(
                     self.model_local_path,
                     **self.loading_kwargs,
-                ) 
+                )
             else:
                 model = Qwen2VLMRForConditionalGeneration.from_pretrained(
                     self.model_finetune_path,
                     **self.loading_kwargs,
-                ) 
+                )
         processor = Qwen2VLMRProcessor.from_pretrained(self.model_local_path)
         tokenizer = processor.tokenizer
         model.tokenizer = tokenizer

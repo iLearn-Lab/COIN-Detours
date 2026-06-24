@@ -91,7 +91,7 @@ class Qwen2VLDataCollator(BaseDataCollator):
             all_timestamps_num = all_timestamps_combine
         all_timestamps_origin = all_timestamps_num
         all_timestamps = [[f"timestamp: {all_t} seconds; feature: " for all_t in sublist] for sublist in all_timestamps_num]
-        
+
         if mode == 'mr_seg':
             for msg, all_t, all_t_o, windows in zip(messages, all_timestamps_num, all_timestamps_origin, temporal_window):
                 num_query = 0
@@ -131,7 +131,7 @@ class Qwen2VLDataCollator(BaseDataCollator):
             combine_t_list=combine_t_list,
             padding=True,
             return_tensors="pt",
-        ) 
+        )
 
         input_ids = inputs['input_ids']
 
@@ -159,7 +159,7 @@ class Qwen2VLDataCollator(BaseDataCollator):
 
                 for i in range(1, num_qa):
                     mask[0, question_indices[i][0]:answer_indices[i][1], prompt_indices[1]:answer_indices[i-1][1]] =  False
-                
+
                 attention_mask_multiqa.append(mask)
             attention_mask_multiqa = torch.stack(attention_mask_multiqa, dim=0)
         except:
@@ -179,13 +179,11 @@ class Qwen2VLDataCollator(BaseDataCollator):
         else:
             multi_qa =  False
             attention_mask_multiqa = None
-        # multi_qa =  False
-        # attention_mask_multiqa = None
 
         if 'pixel_values_videos' in inputs:
             pixel_values_videos = inputs['pixel_values_videos']
         else:
-            pixel_values_videos = None 
+            pixel_values_videos = None
         if 'video_grid_thw' in inputs:
             video_grid_thw = inputs['video_grid_thw']
         else:

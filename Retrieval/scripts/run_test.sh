@@ -1,8 +1,4 @@
 #!/usr/bin/env bash
-# 全库检索评估脚本
-# 用法:
-#   ./run_test.sh 3 ./checkpoints/exp_name/best.pt
-#   ./run_test.sh 3 ./checkpoints/bs32_lr0.0001_ep50_hn3_0319_1430/best.pt
 
 set -e
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
@@ -18,7 +14,6 @@ if [[ -z "$CKPT" ]]; then
     exit 1
 fi
 
-# 结果文件保存在 checkpoint 同目录
 RESULT_DIR=$(dirname "$CKPT")
 RESULT_FILE="$RESULT_DIR/eval_results.json"
 

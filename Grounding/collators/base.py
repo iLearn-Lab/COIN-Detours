@@ -18,7 +18,7 @@ class BaseDataCollator(ABC, object):
         self.tokenizer = tokenizer
         self.processor = processor
         self.mask_question_tokens = mask_question_tokens
-    
+
     @property
     def IGNORE_TOKEN_ID(self) -> int:
         return -100

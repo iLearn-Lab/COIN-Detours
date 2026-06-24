@@ -20,16 +20,14 @@ PAD_IDX = -100
 class VideoDataset(Dataset):
     def __init__(self, dataset):
         self.dataset = dataset
-    
+
     def __len__(self):
         return len(self.dataset)
-    
+
     def __getitem__(self, idx):
         return self.dataset[idx]
 
 def collate_fn(batch):
-    # Since we're doing inference one sample at a time,
-    # just return the first item (we'll use batch_size=1)
     return batch[0]
 
 def setup(rank, world_size):
@@ -40,20 +38,9 @@ def setup(rank, world_size):
 def cleanup():
     dist.destroy_process_group()
 
-# def extract_time(sentences):
-#     results = []
-#     for sentence in sentences:
-#         matches = re.findall(r"(\d+(\.\d+)?)", sentence)
-#         if matches:
-#             results.append(torch.tensor([float(match[0]) for match in matches]))
-#         else:
-#             results.append(torch.tensor([PAD_IDX]))
-#     results = pad_sequence(results, batch_first=True, padding_value=PAD_IDX)
-#     return results
 def extract_time(sentences):
     results = []
     for sentence in sentences:
-        # 只匹配 "xxx seconds" 或 "xxx second"
         matches = re.findall(r"(\d+(?:\.\d+)?)\s*seconds?", sentence, flags=re.IGNORECASE)
         if matches:
             results.append(torch.tensor([float(m) for m in matches]))
@@ -61,7 +48,7 @@ def extract_time(sentences):
             results.append(torch.tensor([PAD_IDX]))
     results = pad_sequence(results, batch_first=True, padding_value=PAD_IDX)
     return results
-    
+
 def to_window_list_pred(pred):
     windows = np.array(list(filter(lambda x: x != PAD_IDX, pred)))
     if len(windows) == 0:
@@ -83,7 +70,6 @@ def to_window_list_pred_vr(pred):
     return window_list
 
 
-####这个是w/o intention的###
 def construct_messages_mr_fps(video2_path, feature2_path, video1_path, fps, querys, retrieval_segment, retrieval_mode, video1_end, clip_length, video1time=15, no_video1=False):
 
         unified_instruction_mr_seg = (
@@ -102,27 +88,11 @@ def construct_messages_mr_fps(video2_path, feature2_path, video1_path, fps, quer
             "Directly output the start and end timestamps that best answer the user's question."
         )
 
-        # unified_instruction_mr_seg = (
-        #     "This is a sequence interleaved with timestamps and frames. "
-        #     "Your task is to identify the specific timestamp(s) based on the user's question, "
-        #     "which is derived from a background video. "
-
-        #     "Start with '[DIRECT]' and output the timestamp(s) directly."
-        # )
-
-
-        # unified_instruction_mr = (
-        #     "This is a sequence interleaved with timestamps and frames. "
-        #     "Your task is to identify the temporal window (start and end timestamps) based on the user's question, "
-        #     "which is derived from a background video. "
-
-        #     "Start with '[DIRECT]' and output the temporal window directly."
-        # )
         video1_start = 0 if video1time == -1 else max(0, video1_end - video1time)
 
         if retrieval_mode == 'mr_seg':
             content = [
-                {"type": "video", "video": f"{video2_path}", "fps": fps, "video_start": retrieval_segment[0], "video_end": retrieval_segment[1], 
+                {"type": "video", "video": f"{video2_path}", "fps": fps, "video_start": retrieval_segment[0], "video_end": retrieval_segment[1],
                     "feature": f"{feature2_path}", "num_clips": 1, "clip_length": clip_length},
             ]
             if no_video1:
@@ -148,7 +118,6 @@ def construct_messages_mr_fps(video2_path, feature2_path, video1_path, fps, quer
         return message
 
 
-
 def run_inference(model, processor, data, args, device):
     qid = data["qid"]
     vid = data["id"]
@@ -158,34 +127,24 @@ def run_inference(model, processor, data, args, device):
     video_end = data.get("video_end", data["duration"])
     temporal_windows = [anno["window"] for anno in annos]
     querys = [anno["query"] for anno in annos]
-  
+
 
     retrieval_segment = [video_start, video_end]
 
     video1_end = data["video1_startends"][-1] if isinstance(data["video1_startends"], list) else data["video1_startends"]
-   
-    # retrieval_mode = data.get("retrieval_mode", None)
-    # if args.nf_short != -1:
-    #     if (video_end - video_start <= args.nf_short) or retrieval_mode == "mr":
-    #         retrieval_mode = "mr"
-    #     else:
-    #         retrieval_mode = "mr_seg"
-    # elif retrieval_mode == None:
-    #     retrieval_mode = data.get("mode", None)
+
 
     video1_path = data.get("video1_path", None)
     video2_path = data.get("video2_path", None)
 
     feature2_path = data.get("feature2_path", None)
-    
-    # if feature2_path is None and retrieval_mode == 'mr_seg':
-    #     feature2_path = feature(model, processor, video2_path, feature_root=args.feat_folder)
+
     retrieval_mode = "mr"
 
     message = construct_messages_mr_fps(video2_path=video2_path, feature2_path=feature2_path, video1_path=video1_path, \
         fps=args.fps ,querys=querys, retrieval_segment=retrieval_segment, retrieval_mode=retrieval_mode, \
         video1_end=video1_end, clip_length=args.clip_length, video1time=args.video1time, no_video1=args.no_video1)
-    
+
     messages = [message]
 
     image_inputs, video_inputs, all_timestamps_combine, feature_inputs, combine_t_list = process_vision_info(messages)
@@ -221,7 +180,7 @@ def run_inference(model, processor, data, args, device):
             timestamps=all_timestamps,
             combine_t_list=combine_t_list,
             padding=True,
-            return_tensors="pt",            
+            return_tensors="pt",
         )
         inputs = inputs.to(device)
 
@@ -239,7 +198,7 @@ def run_inference(model, processor, data, args, device):
         if 'pixel_values_videos' in inputs:
             pixel_values_videos = inputs['pixel_values_videos']
         else:
-            pixel_values_videos = None 
+            pixel_values_videos = None
 
         model_inputs = dict(
                 input_ids=inputs['input_ids'],
@@ -249,7 +208,7 @@ def run_inference(model, processor, data, args, device):
                 feature_inputs=feature_inputs,
                 combine_t_list=combine_t_list
             )
-        
+
         gen_kwargs = {'max_new_tokens': 128, 'temperature': 0, 'top_p': 1.0, 'num_beams': 1, 'do_sample': False}
         generated_ids = model.generate(
             **model_inputs,
@@ -269,7 +228,6 @@ def run_inference(model, processor, data, args, device):
         output_text = processor.batch_decode(
             generated_ids_trimmed, skip_special_tokens=True, clean_up_tokenization_spaces=False
         )
-        # import ipdb;ipdb.set_trace()
         predictions = extract_time(output_text).numpy()
         if retrieval_mode =='mr':
             data_dict = {
@@ -286,7 +244,6 @@ def run_inference(model, processor, data, args, device):
                 "feature2_path": feature2_path,
                 "pred_relevant_windows": to_window_list_pred(predictions[0]),
                 "pred_relevant_windows_mr_seg": data.get("pred_relevant_windows_mr_seg", None),
-                # "true_intention":data["video2_sentences"],
                 "output_text":output_text,
             }
             results.append(data_dict)
@@ -322,76 +279,42 @@ def run_inference(model, processor, data, args, device):
     return results
 
 def inference_worker(rank, world_size, args):
-    # setup(rank, world_size)
-    
-    # Load model and processor
+
     device = torch.device(f"cuda:{rank}")
     if args.model_finetune_path:
         model = Qwen2VLMRForConditionalGeneration.from_pretrained(
-            args.model_finetune_path, 
-            torch_dtype=torch.bfloat16, 
-            device_map={"": device}, 
+            args.model_finetune_path,
+            torch_dtype=torch.bfloat16,
+            device_map={"": device},
         )
     else:
         model = Qwen2VLMRForConditionalGeneration.from_pretrained(
-            args.model_local_path, 
-            torch_dtype=torch.bfloat16, 
-            device_map={"": device}, 
+            args.model_local_path,
+            torch_dtype=torch.bfloat16,
+            device_map={"": device},
         )
-    
+
     model.eval()
-    
+
     processor = Qwen2VLMRProcessor.from_pretrained(args.model_local_path)
-    
-    # Load dataset
+
     dataset = json.load(open(args.data_path, "r"))
-    # video_dataset = VideoDataset(dataset)
-    # sampler = DistributedSampler(video_dataset, num_replicas=world_size, rank=rank, shuffle=False)
-    
-   
-    
-    
-    # dataloader = DataLoader(
-    #     video_dataset, 
-    #     batch_size=1, 
-    #     sampler=sampler,
-    #     collate_fn=collate_fn  # Use our custom collate function
-    # )
-
-
-    
-    # Run inference
-    # all_results = []
-    # for data in tqdm(dataset[634:635], desc=f"Processing (rank {rank})", disable=rank != 0):
-    #     # print(data)
-    #     # data = data[0]  # Since batch_size=1
-    #     results = run_inference(model, processor, data, args, device)
-    #     all_results.extend(results)
-    
-    # # Save results from each process
-    # os.makedirs(args.output_dir, exist_ok=True)
-    # output_file = os.path.join(args.output_dir, f"results_rank_{rank}.json")
-    # with open(output_file, 'w') as f:
-    #     json.dump(all_results, f, indent=4)
     os.makedirs(args.output_dir, exist_ok=True)
     print(args.output_dir)
     output_file = os.path.join(args.output_dir, f"results_{args.start}.jsonl")
     print(output_file)
-    
 
-    # output_file = args.output_path
+
     with open(output_file, "a", encoding="utf-8") as f:
         for data in tqdm(dataset[args.start:args.end], desc=f"Processing (rank {rank})", disable=rank != 0):
             try:
                 results = run_inference(model, processor, data, args, device)
 
-                # ✅ 正常情况
                 for item in results:
                     f.write(json.dumps(item, ensure_ascii=False) + "\n")
                     f.flush()
 
             except Exception as e:
-                # ✅ 出错时记录 error
                 error_item = {
                     "qid": data.get("qid", None),
                     "error": True,
@@ -401,8 +324,7 @@ def inference_worker(rank, world_size, args):
                 f.flush()
                 print(f"❌ Error processing qid={data.get('qid', None)}: {e}")
                 continue
-    
-    # cleanup()
+
 
 def merge_results(output_dir, world_size):
     final_results = []
@@ -413,8 +335,7 @@ def merge_results(output_dir, world_size):
                 results = json.load(f)
                 final_results.extend(results)
             os.remove(result_file)  # Clean up temporary files
-    
-    # Save final merged results
+
     final_output_file = os.path.join(output_dir, "results.json")
     with open(final_output_file, 'w') as f:
         json.dump(final_results, f, indent=4)
@@ -434,9 +355,8 @@ def main():
     parser.add_argument('--end', default=1000, type=int)
     parser.add_argument('--no_video1', action='store_true', help='不使用video1背景视频（与原始baseline相同的评测条件）')
     parser.add_argument('--video1time', type=int, default=15, help='background video 时长(秒); -1 表示从 0 到 video1_end，否则 video_start=video1_end-video1time')
-    
-    
-    
+
+
     args = parser.parse_args()
 
     world_size = torch.cuda.device_count()
@@ -447,10 +367,8 @@ def main():
             nprocs=world_size,
             join=True
         )
-        # Merge results from all processes
         merge_results(args.output_dir, world_size)
     else:
-        # Single GPU case
         inference_worker(0, 1, args)
 
 if __name__ == "__main__":

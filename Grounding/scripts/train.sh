@@ -9,11 +9,9 @@ export CUDA_VISIBLE_DEVICES=5,6,7
 export DECORD_EOF_RETRY_MAX=20480
 
 MODEL_ID=qwen2-vl-2b-instruct
-model_local_path="/home/wenan/hf/Qwen2-VL-2B-Instruct" 
+model_local_path="/home/wenan/hf/Qwen2-VL-2B-Instruct"
 TRAIN_DATA_PATH="/home/wenan/UniTime-main/datasets/COIN_train_unitime_mr+seg_mr.json"
 EVAL_DATA_PATH=None
-# TRAIN_DATA_PATH="/data1/wenan/UniTime-new-main/datasets/test1.json"
-# EVAL_DATA_PATH="/data1/wenan/UniTime-new-main/datasets/test2.json"
 IMAGE_FOLDER=None
 VIDEO_FOLDER="/home/wenan/COINvideos"  #If you specified video_path in the data file, this can be set to none
 FEAT_FOLDER="/home/wenan/UniTime-main/feature_coin_train"  #If you specified feature_path in the data file, this can be set to none
@@ -39,8 +37,6 @@ NUM_EPOCHS=2                                          # 设置为2
 LR=2e-4                                                 # learning rate
 MODEL_MAX_LEN=32768                                      # maximum input length of the model
 
-# 从checkpoint继续训练
-# RESUME_PATH=/mnt/nodestor/wenan/UniTime-new-main/checkpoints/COIN_qwen2_train_plus_yangyong/checkpoint-2000
 
 torchrun $DISTRIBUTED_ARGS /home/wenan/UniTime-main/train.py \
     --model_id $MODEL_ID \

@@ -19,10 +19,6 @@ import torch.nn.functional as F
 from transformers import AutoModel
 
 
-# ---------------------------------------------------------------------------
-#  Building blocks
-# ---------------------------------------------------------------------------
-
 class PositionalEncoding(nn.Module):
     """Sinusoidal positional encoding with a learnable scale factor."""
 
@@ -38,20 +34,12 @@ class PositionalEncoding(nn.Module):
         )
         pe[:, 0::2] = torch.sin(position * div_term)
         pe[:, 1::2] = torch.cos(position * div_term)
-        self.register_buffer("pe", pe.unsqueeze(0))  # [1, max_len, D]
+        self.register_buffer("pe", pe.unsqueeze(0))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        # x: [B, T, D]
         x = x + self.scale * self.pe[:, : x.size(1)]
 
 
-        # 标准 Transformer 是： x = x + pe
-        # 这里变成了x = x + scale * pe
-        # 模型可以自己决定位置编码的重要性
-        # 训练过程中可能学到：
-        # scale ≈ 0 → 几乎不用位置
-        # scale ≈ 1 → 正常使用
-        # scale > 1 → 强调位置
         return self.dropout(x)
 
 
@@ -114,17 +102,14 @@ class EventPooling(nn.Module):
         self.num_events = num_events
         self.event_queries = nn.Parameter(torch.randn(1, num_events, d_model) * 0.02)
 
-        # Cross-attention: each event query attends to frame features
         self.cross_attn = nn.MultiheadAttention(d_model, num_heads,
                                                  batch_first=True, dropout=dropout)
         self.norm1 = nn.LayerNorm(d_model)
 
-        # Self-attention: event vectors interact with each other
         self.self_attn = nn.MultiheadAttention(d_model, num_heads,
                                                 batch_first=True, dropout=dropout)
         self.norm2 = nn.LayerNorm(d_model)
 
-        # Per-event feedforward
         self.ffn = nn.Sequential(
             nn.Linear(d_model, d_model * 2),
             nn.GELU(),
@@ -142,21 +127,18 @@ class EventPooling(nn.Module):
             [B, num_events, D]
         """
         B = x.size(0)
-        q = self.event_queries.expand(B, -1, -1)   # [B, num_events, D]
+        q = self.event_queries.expand(B, -1, -1)
         pad_mask = ~mask if mask is not None else None
 
-        # Cross-attention: events ← frames
         ca_out, _ = self.cross_attn(q, x, x, key_padding_mask=pad_mask)
         q = self.norm1(q + ca_out)
 
-        # Self-attention: events interact
         sa_out, _ = self.self_attn(q, q, q)
         q = self.norm2(q + sa_out)
 
-        # FFN
         q = self.norm3(q + self.ffn(q))
 
-        return q  # [B, num_events, D]
+        return q
 
 
 class QueryGuidedPooling(nn.Module):
@@ -176,10 +158,10 @@ class QueryGuidedPooling(nn.Module):
             video_feat: [B, T, D]
             mask:       [B, T]  True = valid
         """
-        q = self.q_proj(text_feat).unsqueeze(1)          # [B, 1, D]
+        q = self.q_proj(text_feat).unsqueeze(1)
         pad_mask = ~mask if mask is not None else None
         out, _ = self.attn(q, video_feat, video_feat, key_padding_mask=pad_mask)
-        return self.norm(out.squeeze(1))                  # [B, D]
+        return self.norm(out.squeeze(1))
 
 
 class GatedFusion(nn.Module):
@@ -189,12 +171,11 @@ class GatedFusion(nn.Module):
         super().__init__()
         self.gate = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.Sigmoid())
         self.proj = nn.Sequential(nn.Linear(d_model * 2, d_model), nn.GELU())
-#feat_a 输入的是attended ，，feat_b输入的是 text
     def forward(self, feat_a: torch.Tensor, feat_b: torch.Tensor):
         combined = torch.cat([feat_a, feat_b], dim=-1)
         g = self.gate(combined)
         h = self.proj(combined)
-        return g * feat_a + (1 - g) * h  
+        return g * feat_a + (1 - g) * h
 
 class ProjectionHead(nn.Module):
     """Two-layer MLP projection into the retrieval embedding space."""
@@ -213,10 +194,6 @@ class ProjectionHead(nn.Module):
         return self.net(x)
 
 
-# ---------------------------------------------------------------------------
-#  Towers
-# ---------------------------------------------------------------------------
-
 class VideoTower(nn.Module):
     """Encode a target video into K event-level retrieval vectors."""
 
@@ -228,7 +205,6 @@ class VideoTower(nn.Module):
         self.pos_enc = PositionalEncoding(feat_dim, dropout=dropout)
         self.temporal = TemporalTransformer(feat_dim, num_heads, num_layers,
                                             ff_dim, dropout)
-        # self.pool = AttentionPooling(feat_dim, num_heads)                                    
         self.pool = EventPooling(feat_dim, num_events, num_heads, dropout)
         self.proj = ProjectionHead(feat_dim, embed_dim)
 
@@ -239,14 +215,13 @@ class VideoTower(nn.Module):
             video_feat: [B, T, D]   pre-extracted frame features
             mask:       [B, T]      True = valid
         Returns:
-            # 之前没有加入 num_events 参数，所以是 [B, D]
             [B, num_events, embed_dim]  L2-normalised per-event embeddings
         """
         x = self.input_norm(video_feat)
         x = self.pos_enc(x)
         x = self.temporal(x, mask)
-        x = self.pool(x, mask)      # [B, num_events, D]
-        x = self.proj(x)            # [B, num_events, embed_dim]  (Linear acts on last dim)
+        x = self.pool(x, mask)
+        x = self.proj(x)
         return F.normalize(x, dim=-1)
 
 
@@ -276,13 +251,11 @@ class QueryTower(nn.Module):
             nn.GELU(),
         )
 
-        # ---- history video encoder ----
         self.input_norm = nn.LayerNorm(feat_dim)
         self.pos_enc = PositionalEncoding(feat_dim, dropout=dropout)
         self.temporal = TemporalTransformer(feat_dim, num_heads, num_layers,
                                             ff_dim, dropout)
 
-        # ---- query-guided pooling + fusion ----
         self.qg_pool = QueryGuidedPooling(feat_dim, num_heads)
         self.fusion = GatedFusion(feat_dim)
         self.proj = ProjectionHead(feat_dim, embed_dim)
@@ -293,12 +266,12 @@ class QueryTower(nn.Module):
             with torch.no_grad():
                 out = self.text_model(input_ids=input_ids,
                                       attention_mask=attention_mask)
-                raw = out.pooler_output           # [B, D]
+                raw = out.pooler_output
         else:
             out = self.text_model(input_ids=input_ids,
                                   attention_mask=attention_mask)
             raw = out.pooler_output
-        return self.text_adapter(raw)             # [B, D]
+        return self.text_adapter(raw)
 
     def forward(self, history_feat: torch.Tensor,
                 history_mask: torch.Tensor,
@@ -322,18 +295,14 @@ class QueryTower(nn.Module):
 
         h = self.input_norm(history_feat)
         h = self.pos_enc(h)
-        h = self.temporal(h, history_mask)         # [B, T, D]
+        h = self.temporal(h, history_mask)
 
-        attended = self.qg_pool(text_feat, h, history_mask)  # [B, D]
-        fused = self.fusion(attended, text_feat)              # [B, D]
+        attended = self.qg_pool(text_feat, h, history_mask)
+        fused = self.fusion(attended, text_feat)
 
         out = self.proj(fused)
         return F.normalize(out, dim=-1)
 
-
-# ---------------------------------------------------------------------------
-#  Full model
-# ---------------------------------------------------------------------------
 
 class ComposedVideoRetriever(nn.Module):
     """Dual-tower model for composed video retrieval.
@@ -391,9 +360,8 @@ class ComposedVideoRetriever(nn.Module):
         """
         B_v, E, D = video_emb_all.shape
         B_q = query_emb.size(0)
-        # [B_q, B_v*E] then reshape + max over events
-        raw = query_emb @ video_emb_all.reshape(B_v * E, D).T   # [B_q, B_v*E]
-        return raw.reshape(B_q, B_v, E).max(dim=-1).values       # [B_q, B_v]
+        raw = query_emb @ video_emb_all.reshape(B_v * E, D).T
+        return raw.reshape(B_q, B_v, E).max(dim=-1).values
 
     @staticmethod
     def _maxsim_v2q(video_emb: torch.Tensor,
@@ -404,8 +372,8 @@ class ComposedVideoRetriever(nn.Module):
         """
         B_v, E, D = video_emb.shape
         B_q = query_emb_all.size(0)
-        raw = video_emb.reshape(B_v * E, D) @ query_emb_all.T   # [B_v*E, B_q]
-        return raw.reshape(B_v, E, B_q).max(dim=1).values        # [B_v, B_q]
+        raw = video_emb.reshape(B_v * E, D) @ query_emb_all.T
+        return raw.reshape(B_v, E, B_q).max(dim=1).values
 
     @staticmethod
     def orthogonality_loss(video_emb: torch.Tensor) -> torch.Tensor:
@@ -418,7 +386,7 @@ class ComposedVideoRetriever(nn.Module):
         """
         if video_emb.dim() != 3 or video_emb.size(1) == 1:
             return video_emb.new_tensor(0.0)
-        gram = torch.bmm(video_emb, video_emb.transpose(1, 2))     # [B, E, E]
+        gram = torch.bmm(video_emb, video_emb.transpose(1, 2))
         E = gram.size(1)
         eye = torch.eye(E, device=gram.device, dtype=gram.dtype).unsqueeze(0)
         off_diag = gram - eye                                        # zero out diagonal
@@ -450,25 +418,21 @@ class ComposedVideoRetriever(nn.Module):
         B_local = query_emb.size(0)
         labels = torch.arange(B_local, device=query_emb.device) + labels_offset
 
-        # ---- q → v loss: MaxSim(query, all_videos) + hard negatives ----
-        sim_q2v = logit_scale * self._maxsim_q2v(query_emb, v_all)   # [B_local, B_total]
+        sim_q2v = logit_scale * self._maxsim_q2v(query_emb, v_all)
 
         if hard_neg_emb is not None and hard_neg_valid is not None and hard_neg_valid.any():
-            # hn_emb: [B_local, K, num_events, D]
             B_l, K, E, D_e = hard_neg_emb.shape
-            # MaxSim per hard neg: [B_local, K]
-            hn_flat = hard_neg_emb.reshape(B_l, K * E, D_e)           # [B_l, K*E, D]
+            hn_flat = hard_neg_emb.reshape(B_l, K * E, D_e)
             hn_sim = logit_scale * torch.bmm(
                 hn_flat, query_emb.unsqueeze(-1)
-            ).squeeze(-1)                                               # [B_l, K*E]
-            hn_sim = hn_sim.reshape(B_l, K, E).max(dim=-1).values      # [B_l, K]
+            ).squeeze(-1)
+            hn_sim = hn_sim.reshape(B_l, K, E).max(dim=-1).values
             hn_sim = hn_sim.masked_fill(~hard_neg_valid, float("-inf"))
-            sim_q2v = torch.cat([sim_q2v, hn_sim], dim=1)             # [B_local, B_total+K]
+            sim_q2v = torch.cat([sim_q2v, hn_sim], dim=1)
 
         loss_q2v = F.cross_entropy(sim_q2v, labels)
 
-        # ---- v → q loss: MaxSim(all_videos, queries) ----
-        sim_v2q = logit_scale * self._maxsim_v2q(video_emb, q_all)    # [B_local, B_total]
+        sim_v2q = logit_scale * self._maxsim_v2q(video_emb, q_all)
         loss_v2q = F.cross_entropy(sim_v2q, labels)
 
         loss = (loss_q2v + loss_v2q) / 2

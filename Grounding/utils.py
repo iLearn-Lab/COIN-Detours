@@ -34,8 +34,6 @@ class NoTextOnlyBatchSampler(Sampler):
         return len(self.is_text_only)
 
     def __iter__(self):
-        # mm: multimodal, entry that has both text and image/video
-        # uni: unimodal, entry that has only text
         mm_indices = [i for i, is_text_only in enumerate(self.is_text_only) if not is_text_only]
         uni_indices = [i for i, is_text_only in enumerate(self.is_text_only) if is_text_only]
 
@@ -43,20 +41,18 @@ class NoTextOnlyBatchSampler(Sampler):
         if len(mm_indices) < num_batches:
             raise ValueError(
                 f"{len(mm_indices)} multimodal entries, {len(num_batches)} batches. "
-                "Not enough multimodal data in the dataset, or the batch size is too small. " 
+                "Not enough multimodal data in the dataset, or the batch size is too small. "
                 "There will be at least one batch that is text-only, which doesn't work with deepspeed. "
                 "Try increasing the batch size first."
             )
 
-        # shuffle indices
         mm_indices = [mm_indices[i] for i in torch.randperm(len(mm_indices), generator=None).tolist()]
         uni_indices = [uni_indices[i] for i in torch.randperm(len(uni_indices), generator=None).tolist()]
 
-        # distribute indices into batches
         num_uni_indices_in_mega_batch = [len(uni_indices) // num_batches] * num_batches
         for i in range(len(uni_indices) % num_batches):
             num_uni_indices_in_mega_batch[i] += 1
-        
+
         mega_batches = []
         cur_uni_index = 0
         cur_mm_index = 0
@@ -75,9 +71,9 @@ class NoTextOnlyBatchSampler(Sampler):
             else: # last batch
                 mega_batch.extend(mm_indices[cur_mm_index:])
                 assert len(mega_batch) <= self.mega_batch_size, "Last batch is too big."
-            
+
             mega_batches.append(mega_batch)
-        
+
         mega_batch_indices = torch.randperm(len(mega_batches), generator=self.generator)
         mega_batches = [mega_batches[i] for i in mega_batch_indices]
         indices = [i for mega_batch in mega_batches for i in mega_batch]
@@ -95,7 +91,7 @@ class TrainerWithCustomSampler(Trainer):
             world_size=self.args.world_size * self.args.gradient_accumulation_steps,
             is_text_only=is_text_only,
         )
-    
+
     def _get_eval_sampler(self, eval_dataset: torch.utils.data.Dataset) -> Optional[torch.utils.data.Sampler]:
         is_text_only = eval_dataset.is_text_only
         return NoTextOnlyBatchSampler(

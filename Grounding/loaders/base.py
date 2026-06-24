@@ -7,7 +7,7 @@ from transformers import PreTrainedModel, PreTrainedTokenizer, AutoProcessor, Bi
 
 class BaseModelLoader(ABC):
     def __init__(
-        self, 
+        self,
         model_hf_path: str,
         model_local_path: str,
         compute_dtype: torch.dtype,

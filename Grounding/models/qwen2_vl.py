@@ -1,19 +1,18 @@
 from typing import Any, Dict, List, Optional, Tuple, Union
-import torch 
+import torch
 from transformers.utils import logging
 
 logger = logging.get_logger(__name__)
 
 from transformers import Qwen2VLForConditionalGeneration
-from torch import nn 
+from torch import nn
 from transformers.models.qwen2_vl.modeling_qwen2_vl import Qwen2VLCausalLMOutputWithPast, Qwen2VisionTransformerPretrainedModel, Qwen2VLModel
-import torch.nn.functional as F 
+import torch.nn.functional as F
 from transformers.cache_utils import StaticCache
 from torch.nn import CrossEntropyLoss
 from collators.qwen2_vl import PAD_IDX
 import numpy as np
 from transformers.utils import is_torchdynamo_compiling
-# from utils import iou_loss, giou_loss
 
 
 class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
@@ -31,8 +30,7 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
         self.rope_deltas = None
 
 
-        # Initialize weights and apply final processing
-        self.post_init()    
+        self.post_init()
 
     def encode_video_chunk(self, pixel_values_videos, video_grid_thw, combine_t_list):
         video_embeds = []
@@ -40,7 +38,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
         video_batch_size = 8
         video_index = 0
         for combine_t in combine_t_list:
-            # t = len(combine_t)
             t = (combine_t == 1).sum().item()
             thw = video_grid_thw[video_index]
             for t_start in range(0, t, video_batch_size):
@@ -64,7 +61,7 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
             video_index += t
         video_embeds = torch.cat(video_embeds).to(pixel_values_videos.device)
         return video_embeds
-    
+
     def get_rope_index_multiqa(
         self,
         input_ids: Optional[torch.LongTensor] = None,
@@ -271,16 +268,13 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
                 if pixel_values_videos is not None and feature_inputs is not None:
                     pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                     video_embeds = self.encode_video_chunk(pixel_values_videos, video_grid_thw[len(combine_t_list[0]):], [combine_t_list[1]]).to(inputs_embeds.device)
-                    # import ipdb;ipdb.set_trace()
-                    video_embeds.requires_grad=True                   
-                
+                    video_embeds.requires_grad=True
+
                     feature_inputs = feature_inputs.to(video_embeds.device, video_embeds.dtype)
-                    # ✅ 直接在时间维度拼接
                     video_embeds = torch.cat([feature_inputs, video_embeds], dim=0)
                 elif pixel_values_videos is not None and feature_inputs is None:
                     pixel_values_videos = pixel_values_videos.type(self.visual.get_dtype())
                     video_embeds = self.encode_video_chunk(pixel_values_videos, video_grid_thw, combine_t_list).to(inputs_embeds.device)
-                    # import ipdb;ipdb.set_trace()
                     video_embeds.requires_grad=True
 
                 else:
@@ -293,16 +287,14 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
             if attention_mask is not None:
                 attention_mask = attention_mask.to(inputs_embeds.device)
 
-        # if we get 4D attention mask we cannot calculate rope deltas anymore. TODO @raushan fixme
         if position_ids is None and (attention_mask is None or attention_mask.ndim == 2):
-            # calculate RoPE index once per generation in the pre-fill stage only
             if (
                 (cache_position is not None and cache_position[0] == 0)
                 or self.rope_deltas is None
                 or (past_key_values is None or past_key_values.get_seq_length() == 0)
             ):
                 reshape_video_grid_thw = video_grid_thw
-                
+
                 if multi_qa:
                     position_ids, rope_deltas = self.get_rope_index_multiqa(
                         input_ids, image_grid_thw, reshape_video_grid_thw, attention_mask
@@ -312,7 +304,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
                         input_ids, image_grid_thw, reshape_video_grid_thw, attention_mask
                     )
                 self.rope_deltas = rope_deltas
-            # then use the prev pre-calculated rope-deltas to get the correct position ids
             else:
                 batch_size, seq_length, _ = inputs_embeds.shape
                 delta = cache_position[0] + self.rope_deltas if cache_position is not None else 0
@@ -323,11 +314,11 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
                     delta = delta.to(position_ids.device)
                 position_ids = position_ids.add(delta)
                 position_ids = position_ids.unsqueeze(0).expand(3, -1, -1)
-            
-        
+
+
         if attention_mask_multiqa is not None:
             attention_mask = attention_mask_multiqa.to(inputs_embeds.device)
-    
+
         outputs = self.model(
             input_ids=None,
             position_ids=position_ids,
@@ -346,14 +337,11 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
 
         loss = None
         if labels is not None:
-            # Shift so that tokens < n predict n
             shift_logits = logits[..., :-1, :].contiguous()
             shift_labels = labels[..., 1:].contiguous()
-            # Flatten the tokens
             loss_fct = CrossEntropyLoss()
             shift_logits = shift_logits.view(-1, self.config.vocab_size)
             shift_labels = shift_labels.view(-1)
-            # Enable model parallelism
             shift_labels = shift_labels.to(shift_logits.device)
             loss = loss_fct(shift_logits, shift_labels)
 
@@ -361,7 +349,7 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
         if not return_dict:
             output = (logits,) + outputs[1:]
             return (loss,) + output if loss is not None else output
-        
+
         return Qwen2VLCausalLMOutputWithPast(
             loss=loss,
             logits=logits,
@@ -370,7 +358,7 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
             attentions=outputs.attentions,
             rope_deltas=self.rope_deltas,
         )
-    
+
     def prepare_inputs_for_generation(
         self,
         input_ids,
@@ -407,7 +395,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
             pixel_values_videos = None
             feature_inputs = None
 
-        # if `inputs_embeds` are passed, we only want to use them in the 1st generation step
         if inputs_embeds is not None and len(cache_position) == inputs_embeds.shape[1]:
             model_inputs = {"inputs_embeds": inputs_embeds, "input_ids": None}
         else:
@@ -451,7 +438,7 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
             }
         )
         return model_inputs
-    
+
     def _expand_inputs_for_generation(
         self,
         expand_size: int = 1,
@@ -459,11 +446,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
         input_ids: Optional[torch.LongTensor] = None,
         **model_kwargs,
     ) -> Tuple[torch.LongTensor, Dict[str, Any]]:
-        # Overwritten -- Support for expanding tensors without a batch size dimension
-        # e.g., pixel_values, image_grid_thw, pixel_values_videos, video_grid_thw, second_per_grid_t
-        # pixel_values.shape[0] is sum(seqlen_images for samples)
-        # image_grid_thw.shape[0] is sum(num_images for samples)
-
         if expand_size == 1:
             return input_ids, model_kwargs
 
@@ -482,15 +464,12 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
 
             for key in dict_to_expand:
                 if key == "pixel_values":
-                    # split images into samples
                     samples = torch.split(image_grid_thw, list(image_nums))
-                    # compute the sequence length of images for each sample
                     lengths = [torch.prod(sample, dim=1).sum() for sample in samples]
                     dict_to_expand[key] = _repeat_interleave_samples(
                         dict_to_expand[key], lengths=lengths, repeat_times=expand_size
                     )
                 elif key == "image_grid_thw":
-                    # get the num of images for each sample
                     lengths = list(image_nums)
                     dict_to_expand[key] = _repeat_interleave_samples(
                         dict_to_expand[key], lengths=lengths, repeat_times=expand_size
@@ -528,8 +507,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
                     dict_to_expand[key] = dict_to_expand[key].repeat_interleave(expand_size, dim=0)
             return dict_to_expand
 
-        # input_ids is required for expanding visual inputs
-        # If input_ids is unavailable, visual inputs will not be used; therefore, there is no need to expand visual inputs.
         if input_ids is not None and input_ids.numel() != 0:
             model_kwargs = _expand_dict_for_generation_visual(model_kwargs)
 
@@ -547,7 +524,6 @@ class Qwen2VLMRForConditionalGeneration(Qwen2VLForConditionalGeneration):
 
 from transformers.processing_utils import ProcessingKwargs, ProcessorMixin, Unpack
 from transformers.image_utils import ImageInput, VideoInput
-# from transformers.video_utils import VideoInput
 from transformers.feature_extraction_utils import BatchFeature
 from transformers.tokenization_utils_base import PreTokenizedInput, TextInput
 from transformers.models.qwen2_vl.processing_qwen2_vl import Qwen2VLProcessorKwargs, Qwen2VLProcessor
@@ -575,33 +551,15 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
             image_inputs = {}
             image_grid_thw = None
 
-        # if features is None:
-        #     if videos is not None:
-        #         videos_inputs = self.image_processor(images=None, videos=videos, **output_kwargs["videos_kwargs"])
-        #         video_grid_thw = videos_inputs["video_grid_thw"]
-        #         video_grid_thw = [[torch.tensor(1).to(thw.device),thw[1],thw[2]] for thw in video_grid_thw for i in range(thw[0])]
-        #         videos_inputs["video_grid_thw"] = torch.tensor(video_grid_thw)
-        #     else:
-        #         videos_inputs = {}
-        #         video_grid_thw = None
-        # else:
-        #     videos_inputs = {}
-        #     video_grid_thw = [torch.tensor([features[i].shape[0], features[i].shape[1] * 2, features[i].shape[2] * 2]) for i in range(len(features))]
-        #     video_grid_thw = [[c_t, thw[1], thw[2]] for thw, combine_t in zip(video_grid_thw, combine_t_list) for c_t in combine_t]
-        #     videos_inputs["video_grid_thw"] = torch.tensor(video_grid_thw)
-
-                #============================================
         if features is None and videos is None:
             videos_inputs = {}
             video_grid_thw_list = None
 
         else:
             videos_inputs = {}
-            video_grid_thw_list = []  # 👈 改为list形式收集所有grid
-            
-            
-            # 先输入的是video2 只有video2是可以用feature的，video1全部在线采
-            # ====== 来自 feature 的部分 ======
+            video_grid_thw_list = []
+
+
             if features is not None:
                 feat_video_grid_thw = [
                     torch.tensor([features[i].shape[0],
@@ -609,7 +567,7 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
                                 features[i].shape[2] * 2])
                     for i in range(len(features))
                 ]
-                
+
                 feat_video_grid_thw = [
                     [c_t, thw[1], thw[2]]
                     for thw, combine_t in zip(feat_video_grid_thw, combine_t_list)
@@ -618,13 +576,11 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
 
                 video_grid_thw_list.extend(feat_video_grid_thw)
 
-            # ====== 来自 video 的部分 ======
             if videos is not None:
                 video_inputs_from_video = self.image_processor(
                     images=None, videos=videos, **output_kwargs["videos_kwargs"]
                 )
                 video_grid_thw_video = video_inputs_from_video["video_grid_thw"]
-                # 展开每个时间步
                 video_grid_thw_video = [
                     [torch.tensor(1).to(thw.device), thw[1], thw[2]]
                     for thw in video_grid_thw_video
@@ -632,9 +588,8 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
                 ]
                 video_grid_thw_list.extend(video_grid_thw_video)
                 videos_inputs.update(video_inputs_from_video)
-            
 
-            # ====== 合并结果 ======
+
             if len(video_grid_thw_list) > 0:
                 device = (
                     video_inputs_from_video["video_grid_thw"][0].device
@@ -646,8 +601,7 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
                 )
             else:
                 videos_inputs["video_grid_thw"] = None
-        
-        #============================================
+
 
         if not isinstance(text, list):
             text = [text]
@@ -686,9 +640,6 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
                                 for timestamp, combine_t in zip(timestamps[index], combine_t_list[index]):
                                     replacement += timestamp + "<|vision_start|>" + "<|placeholder|>" * (combine_t * h * w // merge_length) + "<|vision_end|>"
                                 text[i] = text[i].replace("<|vision_start|><|video_pad|><|vision_end|>", replacement, 1)
-                                # text[i] = text[i].replace("<|video_pad|>", replacement, 1)
-                                # text[i] = text[i].replace("<|vision_start|>", "", 1)
-                                # text[i] = text[i].replace("<|vision_end|><|vision_end|>", "<|vision_end|>")
                                 video_index += len(timestamps[index])
                             else:
                                 t, h, w = video_grid_thw_list[video_index]
@@ -696,9 +647,6 @@ class Qwen2VLMRProcessor(Qwen2VLProcessor):
                                 for timestamp, combine_t in zip(timestamps[index], combine_t_list[index]):
                                     replacement += "<|vision_start|>" + "<|placeholder|>" * (combine_t * h * w // merge_length) + "<|vision_end|>"
                                 text[i] = text[i].replace("<|vision_start|><|video_pad|><|vision_end|>", replacement, 1)
-                                # text[i] = text[i].replace("<|video_pad|>", replacement, 1)
-                                # text[i] = text[i].replace("<|vision_start|>", "", 1)
-                                # text[i] = text[i].replace("<|vision_end|><|vision_end|>", "<|vision_end|>")
                                 video_index += len(timestamps[index])
                     else:
                         text[i] = text[i].replace(

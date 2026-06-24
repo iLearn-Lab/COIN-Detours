@@ -33,10 +33,6 @@ from dataset import (COINRetrievalDataset, InternVideoRetrievalDataset,
 from model import ComposedVideoRetriever
 
 
-# ---------------------------------------------------------------------------
-#  Video-only dataset (for building the FAISS index over the full library)
-# ---------------------------------------------------------------------------
-
 class VideoPoolDataset(Dataset):
     """Iterate over the full video library, load pre-extracted features."""
 
@@ -83,10 +79,6 @@ class VideoPoolDataset(Dataset):
         return feat, mask, vid
 
 
-# ---------------------------------------------------------------------------
-#  Encoding helpers
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def encode_video_pool(model, vid_list, feature_dir, cfg, device):
     """Encode the full video library → (ordered_vids, embeddings [V, D])."""
@@ -99,14 +91,13 @@ def encode_video_pool(model, vid_list, feature_dir, cfg, device):
     for feat, mask, vids in tqdm(loader, desc="Encoding video library"):
         feat, mask = feat.to(device), mask.to(device)
         with autocast(enabled=cfg.fp16):
-            emb = model.encode_video(feat, mask)   # [B, num_events, D] or [B, D]
-           
+            emb = model.encode_video(feat, mask)
+
         if emb.dim() == 3:
-            # Multi-event: flatten each video's events into separate FAISS entries
             B, num_ev, D = emb.shape
             embs.append(emb.cpu().reshape(B * num_ev, D))
             for v in vids:
-                ordered_vids.extend([v] * num_ev)  # each video occupies num_ev slots
+                ordered_vids.extend([v] * num_ev)
         else:
             embs.append(emb.cpu())
             ordered_vids.extend(vids)
@@ -157,10 +148,6 @@ def encode_all_queries(model, loader, device, fp16=True, query_ablation="full"):
     return embs, target_vids, qids
 
 
-# ---------------------------------------------------------------------------
-#  FAISS index & metrics
-# ---------------------------------------------------------------------------
-
 def build_faiss_index(embeddings: np.ndarray, use_gpu: bool = False):
     dim = embeddings.shape[1]
     index = faiss.IndexFlatIP(dim)
@@ -183,8 +170,7 @@ def compute_metrics(query_embs, gt_vids, vid_list, index,
     assert score_reduce in ("max", "mean"), \
         f"score_reduce must be 'max' or 'mean', got {score_reduce!r}"
 
-    # Detect multi-event mode: vid_list has repetitions
-    unique_vids = list(dict.fromkeys(vid_list))          # order-preserving dedup
+    unique_vids = list(dict.fromkeys(vid_list))
     is_multi_event = len(vid_list) > len(unique_vids)
     n_unique = len(unique_vids)
 
@@ -193,11 +179,10 @@ def compute_metrics(query_embs, gt_vids, vid_list, index,
     n_gt_missing = 0
 
     if is_multi_event:
-        # Full search once for all queries → group scores by video
         mode_name = "MaxSim" if score_reduce == "max" else "MeanSim"
         print(f"[{mode_name}] {n_unique} unique videos × {len(vid_list)//n_unique} events "
               f"= {len(vid_list)} FAISS entries")
-        all_scores, all_indices = index.search(query_embs, index.ntotal)  # [N, V*E]
+        all_scores, all_indices = index.search(query_embs, index.ntotal)
 
         pool_vid_set = set(vid_list)
         for i in range(len(query_embs)):
@@ -206,7 +191,6 @@ def compute_metrics(query_embs, gt_vids, vid_list, index,
                 n_gt_missing += 1
                 continue
 
-            # Group scores by video: reduce over its event entries.
             if score_reduce == "max":
                 vid_scores: dict = {}
                 for score, idx in zip(all_scores[i].tolist(), all_indices[i].tolist()):
@@ -237,7 +221,6 @@ def compute_metrics(query_embs, gt_vids, vid_list, index,
                 "top5_vids": ranked_vids[:5],
             })
     else:
-        # Single-vector mode: batch top-K search, fallback to full search if needed
         vid_to_idx = {v: i for i, v in enumerate(vid_list)}
         max_k = max(top_k)
         scores, indices = index.search(query_embs, min(max_k, index.ntotal))
@@ -281,10 +264,6 @@ def compute_metrics(query_embs, gt_vids, vid_list, index,
     return metrics, results
 
 
-# ---------------------------------------------------------------------------
-#  Main
-# ---------------------------------------------------------------------------
-
 def main():
     parser = argparse.ArgumentParser(description="Full-library retrieval eval")
     parser.add_argument("--checkpoint", type=str, required=True)
@@ -303,7 +282,6 @@ def main():
                         help="Override checkpoint's query_ablation mode for eval.")
     args = parser.parse_args()
 
-    # ---- device ----
     if torch.cuda.is_available():
         device = torch.device("cuda")
         print(f"Using GPU: {torch.cuda.get_device_name(0)}")
@@ -313,7 +291,6 @@ def main():
         fp16 = False
         print("WARNING: No GPU, running on CPU (fp16 disabled)")
 
-    # ---- load checkpoint ----
     print(f"Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     ckpt_cfg = ckpt.get("config", {})
@@ -336,7 +313,6 @@ def main():
     else:
         print(f"[Mode] SigLIP  feature_dir={video_feat_dir}")
 
-    # ---- model ----
     model = ComposedVideoRetriever(
         feat_dim=cfg.feat_dim,
         embed_dim=cfg.embed_dim,
@@ -354,22 +330,18 @@ def main():
     model.eval()
     print(f"Model loaded (epoch {ckpt.get('epoch', '?')})")
 
-    # ---- load video pool (full library) ----
     with open(args.video_pool) as f:
         pool_vids = [line.strip() for line in f if line.strip()]
     print(f"Video pool file: {len(pool_vids)} videos")
 
-    # ---- encode the full video library ----
     t0 = time.time()
     vid_list, video_embs = encode_video_pool(model, pool_vids,
                                              video_feat_dir, cfg, device)
     print(f"Video library encoded: {video_embs.shape}  ({time.time()-t0:.1f}s)")
 
-    # ---- build FAISS index ----
     index = build_faiss_index(video_embs, use_gpu=bool(args.faiss_gpu))
     print(f"FAISS index: {index.ntotal} vectors, dim={video_embs.shape[1]}")
 
-    # ---- load test data & encode queries ----
     test_data = load_data(args.test_json)
     if use_iv:
         iv_query_dirs = [d.strip() for d in cfg.iv_query_feat_dirs.split(",")
@@ -400,7 +372,6 @@ def main():
                                                     query_ablation=query_ablation)
     print(f"Queries encoded: {query_embs.shape}  ({time.time()-t0:.1f}s)")
 
-    # ---- retrieval & metrics ----
     metrics, per_query = compute_metrics(
         query_embs,
         gt_vids,
@@ -417,7 +388,6 @@ def main():
         print(f"  {k:>20s} = {v:.2f}")
     print("=" * 55)
 
-    # ---- save results ----
     output = {
         "metrics": metrics,
         "checkpoint": args.checkpoint,
@@ -429,7 +399,6 @@ def main():
         json.dump(output, f, indent=2, ensure_ascii=False)
     print(f"\nResults saved to {args.save_results}")
 
-    # ---- save FAISS index for future use ----
     index_dir = os.path.dirname(args.checkpoint)
     index_path = os.path.join(index_dir, "video.index")
     cpu_index = (faiss.index_gpu_to_cpu(index)

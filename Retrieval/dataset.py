@@ -66,9 +66,6 @@ class COINRetrievalDataset(Dataset):
         if cache_features:
             self._preload_features()
 
-    # ------------------------------------------------------------------
-    #  Filtering & pre-loading
-    # ------------------------------------------------------------------
 
     def _vid_from_path(self, path: str) -> str:
         return os.path.basename(path).split(".")[0]
@@ -133,9 +130,6 @@ class COINRetrievalDataset(Dataset):
         mem_mb = sum(v.nelement() * v.element_size() for v in self._cache.values()) / 1e6
         print(f"[Dataset] Cached {len(self._cache)} videos, ~{mem_mb:.0f} MB in RAM")
 
-    # ------------------------------------------------------------------
-    #  Feature helpers
-    # ------------------------------------------------------------------
 
     def _load_feat(self, video_path: str) -> torch.Tensor:
         vid = self._vid_from_path(video_path)
@@ -172,9 +166,6 @@ class COINRetrievalDataset(Dataset):
         mask[:T] = True
         return padded, mask
 
-    # ------------------------------------------------------------------
-    #  __getitem__
-    # ------------------------------------------------------------------
 
     def __len__(self):
         return len(self.data)
@@ -182,11 +173,9 @@ class COINRetrievalDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         item = self.data[idx]
 
-        # ---- target video (full) ----
         target_feat = self._load_feat(item["video2_path"])
         target_feat, target_mask = self._pad(target_feat, self.max_target_frames)
 
-        # ---- reference video history (up to timestamp) ----
         history_feat = self._load_feat(item["video1_path"])
         startends = item["video1_startends"]
         timestamp = int(startends[0] if isinstance(startends, list) else startends)
@@ -194,7 +183,6 @@ class COINRetrievalDataset(Dataset):
         history_feat = history_feat[:timestamp]
         history_feat, history_mask = self._pad(history_feat, self.max_history_frames)
 
-        # ---- text query ----
         query_text = item["annos"][0]["query"]
         text_enc = self.tokenizer(
             query_text,
@@ -205,7 +193,6 @@ class COINRetrievalDataset(Dataset):
             return_attention_mask=True,
         )
 
-        # ---- hard negatives ----
         qid = item["qid"]
         T_tgt = self.max_target_frames
 
@@ -225,14 +212,13 @@ class COINRetrievalDataset(Dataset):
 
             hn_valid = torch.zeros(self.max_hard_neg, dtype=torch.bool)
             hn_valid[:n_valid] = True
-            hn_feat_out = torch.stack(hn_feats)     # [K, T, D]
-            hn_mask_out = torch.stack(hn_masks)     # [K, T]
+            hn_feat_out = torch.stack(hn_feats)
+            hn_mask_out = torch.stack(hn_masks)
         else:
             hn_feat_out = torch.empty(0, T_tgt, self.feat_dim)
             hn_mask_out = torch.empty(0, T_tgt, dtype=torch.bool)
             hn_valid = torch.empty(0, dtype=torch.bool)
 
-        # ---- ground-truth temporal window (normalised to [0, 1]) ----
         duration = item.get("duration", 0)
         annos = item.get("annos", [])
         if annos and annos[0].get("window") and duration > 0:
@@ -262,10 +248,6 @@ class COINRetrievalDataset(Dataset):
             "task_id": task_id_from_path(item["video1_path"]),
         }
 
-
-# ---------------------------------------------------------------------------
-#  Helpers for train / val split
-# ---------------------------------------------------------------------------
 
 def split_by_reference_video(
     data: List[dict], val_ratio: float = 0.1, seed: int = 42
@@ -319,10 +301,6 @@ def seconds_to_blip2_frames(seconds: float, duration: float,
     return max(1, min(num_frames, int(ratio * num_frames) or 1))
 
 
-# ---------------------------------------------------------------------------
-#  InternVideo dataset (pre-extracted video + query features, 768-dim)
-# ---------------------------------------------------------------------------
-
 class InternVideoRetrievalDataset(Dataset):
     """Dataset backed by InternVideo (768-d) pre-extracted features.
 
@@ -354,7 +332,6 @@ class InternVideoRetrievalDataset(Dataset):
         self.feat_dim = feat_dim
         self.max_hard_neg = max_hard_neg
 
-        # Build qid → path index across all query feat dirs
         self._qfeat_index: Dict[int, str] = {}
         for d in query_feat_dirs:
             if not os.path.isdir(d):
@@ -378,9 +355,6 @@ class InternVideoRetrievalDataset(Dataset):
         if cache_features:
             self._preload_features()
 
-    # ------------------------------------------------------------------
-    #  Filtering & pre-loading
-    # ------------------------------------------------------------------
 
     def _vid_from_path(self, path: str) -> str:
         return os.path.basename(path).split(".")[0]
@@ -428,7 +402,6 @@ class InternVideoRetrievalDataset(Dataset):
               f"samples have hard negs (max {self.max_hard_neg} per sample)")
 
     def _preload_features(self):
-        # video features
         vids: set = set()
         for item in self.data:
             vids.add(self._vid_from_path(item["video1_path"]))
@@ -439,7 +412,6 @@ class InternVideoRetrievalDataset(Dataset):
         for vid in tqdm(vids, desc="Loading video feats"):
             self._vid_cache[vid] = self._load_vid_from_disk(vid)
 
-        # query features
         qids = {item["qid"] for item in self.data}
         print(f"[InternVideoDataset] Pre-loading {len(qids)} query features …")
         for qid in tqdm(qids, desc="Loading query feats"):
@@ -452,9 +424,6 @@ class InternVideoRetrievalDataset(Dataset):
         print(f"[InternVideoDataset] RAM usage: video={vid_mem:.0f}MB "
               f"query={q_mem:.1f}MB")
 
-    # ------------------------------------------------------------------
-    #  Feature loading helpers
-    # ------------------------------------------------------------------
 
     def _load_vid_from_disk(self, vid: str) -> torch.Tensor:
         feat = torch.load(self._vfeat_path(vid), map_location="cpu",
@@ -468,7 +437,7 @@ class InternVideoRetrievalDataset(Dataset):
                           weights_only=False)
         if feat.dtype == torch.float16:
             feat = feat.float()
-        return feat.squeeze()  # ensure [D]
+        return feat.squeeze()
 
     def _load_vid(self, vid: str) -> torch.Tensor:
         if vid in self._vid_cache:
@@ -500,9 +469,6 @@ class InternVideoRetrievalDataset(Dataset):
         mask[:T] = True
         return padded, mask
 
-    # ------------------------------------------------------------------
-    #  __getitem__
-    # ------------------------------------------------------------------
 
     def __len__(self):
         return len(self.data)
@@ -510,12 +476,10 @@ class InternVideoRetrievalDataset(Dataset):
     def __getitem__(self, idx: int) -> dict:
         item = self.data[idx]
 
-        # ---- target video (full) ----
         target_vid = self._vid_from_path(item["video2_path"])
         target_feat = self._load_vid(target_vid)
         target_feat, target_mask = self._pad(target_feat, self.max_target_frames)
 
-        # ---- reference video history (up to timestamp) ----
         history_vid = self._vid_from_path(item["video1_path"])
         history_feat = self._load_vid(history_vid)
         startends = item["video1_startends"]
@@ -524,11 +488,9 @@ class InternVideoRetrievalDataset(Dataset):
         history_feat = history_feat[:timestamp]
         history_feat, history_mask = self._pad(history_feat, self.max_history_frames)
 
-        # ---- pre-extracted query feature ----
         qid = item["qid"]
-        pre_text_feat = self._load_qfeat(qid)   # [D=768]
+        pre_text_feat = self._load_qfeat(qid)
 
-        # ---- hard negatives ----
         T_tgt = self.max_target_frames
         if self.max_hard_neg > 0:
             neg_vids = self.hard_neg_map.get(qid, [])
@@ -551,7 +513,6 @@ class InternVideoRetrievalDataset(Dataset):
             hn_mask_out = torch.empty(0, T_tgt, dtype=torch.bool)
             hn_valid = torch.empty(0, dtype=torch.bool)
 
-        # ---- ground-truth temporal window ----
         duration = item.get("duration", 0)
         annos = item.get("annos", [])
         if annos and annos[0].get("window") and duration > 0:
@@ -580,10 +541,6 @@ class InternVideoRetrievalDataset(Dataset):
             "task_id": task_id_from_path(item["video1_path"]),
         }
 
-
-# ---------------------------------------------------------------------------
-#  BLIP-2 dataset (CoVR-style video embs + pre-extracted query features)
-# ---------------------------------------------------------------------------
 
 class Blip2RetrievalDataset(Dataset):
     """Dataset backed by BLIP-2 (256-d) pre-extracted features.

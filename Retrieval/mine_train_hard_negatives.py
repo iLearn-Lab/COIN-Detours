@@ -37,11 +37,9 @@ from test import VideoPoolDataset, encode_video_pool, encode_all_queries, build_
 
 
 def mine(args):
-    # ---- device ----
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     fp16 = torch.cuda.is_available()
 
-    # ---- load checkpoint ----
     print(f"Loading checkpoint: {args.checkpoint}")
     ckpt = torch.load(args.checkpoint, map_location="cpu", weights_only=False)
     ckpt_cfg = ckpt.get("config", {})
@@ -60,7 +58,6 @@ def mine(args):
     else:
         print(f"[Mode] SigLIP  feature_dir={video_feat_dir}")
 
-    # ---- model ----
     model = ComposedVideoRetriever(
         feat_dim=cfg.feat_dim,
         embed_dim=cfg.embed_dim,
@@ -78,13 +75,10 @@ def mine(args):
     model.eval()
     print(f"Model loaded (epoch {ckpt.get('epoch', '?')}, num_events={cfg.num_events})")
 
-    # ---- load training data ----
     print(f"Loading training data: {cfg.train_json}")
     train_data = load_data(cfg.train_json)
     print(f"Training samples: {len(train_data)}")
 
-    # ---- build video pool from all unique target videos in train set ----
-    # vid -> original video2_path (keep path for output format compatibility)
     vid2path = {}
     for item in train_data:
         path = item["video2_path"]
@@ -94,13 +88,11 @@ def mine(args):
     pool_vids = list(vid2path.keys())
     print(f"Unique target videos in training set: {len(pool_vids)}")
 
-    # ---- encode the video pool ----
     ordered_vids, video_embs = encode_video_pool(
         model, pool_vids, video_feat_dir, cfg, device
     )
     print(f"Video pool encoded: {video_embs.shape}")
 
-    # ---- build FAISS index ----
     index = build_faiss_index(video_embs, use_gpu=False)
     unique_vids = list(dict.fromkeys(ordered_vids))
     is_multi_event = len(ordered_vids) > len(unique_vids)
@@ -111,7 +103,6 @@ def mine(args):
         num_events = 1
         vid_to_pool_idx = {v: i for i, v in enumerate(ordered_vids)}
 
-    # ---- encode training queries ----
     if use_iv:
         iv_query_dirs = [d.strip() for d in cfg.iv_query_feat_dirs.split(",")
                          if d.strip()]
@@ -142,10 +133,8 @@ def mine(args):
     )
     print(f"Training queries encoded: {query_embs.shape}")
 
-    # ---- search top-K for each query, extract false positives ----
-    search_k = args.max_rank  # video-level rank threshold
+    search_k = args.max_rank
 
-    # qid -> list of false positive vids (ranked before GT)
     mined = []
     n_mined = 0
     n_gt_missing = 0
@@ -231,7 +220,6 @@ def mine(args):
     print(f"  Avg hard negs per query:      "
           f"{sum(len(x['hard_negatives_same_history_diff_query']) for x in mined) / len(mined):.2f}")
 
-    # ---- save ----
     with open(args.output, "w") as f:
         json.dump(mined, f, ensure_ascii=False)
     print(f"\nSaved to: {args.output}")

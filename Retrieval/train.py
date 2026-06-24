@@ -35,10 +35,6 @@ from dataset import (Blip2RetrievalDataset, COINRetrievalDataset,
 from model import ComposedVideoRetriever
 
 
-# ---------------------------------------------------------------------------
-#  Utilities
-# ---------------------------------------------------------------------------
-
 def set_seed(seed: int):
     random.seed(seed)
     np.random.seed(seed)
@@ -168,10 +164,6 @@ def _build_datasets(cfg: Config, train_data, val_data, tokenizer, cache: bool):
     return train_ds, val_ds
 
 
-# ---------------------------------------------------------------------------
-#  Validation (lightweight R@K on validation split)
-# ---------------------------------------------------------------------------
-
 @torch.no_grad()
 def evaluate(model: ComposedVideoRetriever, loader: DataLoader,
              top_k=(1, 5, 10, 50), device="cuda"):
@@ -193,29 +185,26 @@ def evaluate(model: ComposedVideoRetriever, loader: DataLoader,
         all_qids.extend(batch["qid"].tolist() if isinstance(batch["qid"], torch.Tensor)
                         else batch["qid"])
 
-    all_video_embs = torch.cat(all_video_embs, dim=0)    # [N, num_events, D] or [N, D]
-    all_query_embs = torch.cat(all_query_embs, dim=0)    # [N, D]
+    all_video_embs = torch.cat(all_video_embs, dim=0)
+    all_query_embs = torch.cat(all_query_embs, dim=0)
 
-    # Build a de-duplicated video pool
     vid_to_idx = {}
     unique_embs = []
     for i, vid in enumerate(all_target_vids):
         if vid not in vid_to_idx:
             vid_to_idx[vid] = len(unique_embs)
             unique_embs.append(all_video_embs[i])
-    unique_embs = torch.stack(unique_embs)               # [V, num_events, D] or [V, D]
+    unique_embs = torch.stack(unique_embs)
 
-    # Ground-truth index per query
     gt_indices = [vid_to_idx[vid] for vid in all_target_vids]
 
-    # Similarity & ranking — MaxSim for multi-event video embeddings
     N_q = all_query_embs.size(0)
     if unique_embs.dim() == 3:
         V, E, D = unique_embs.shape
-        raw = all_query_embs @ unique_embs.reshape(V * E, D).T  # [N_q, V*E]
-        sim = raw.reshape(N_q, V, E).max(dim=-1).values         # [N_q, V]
+        raw = all_query_embs @ unique_embs.reshape(V * E, D).T
+        sim = raw.reshape(N_q, V, E).max(dim=-1).values
     else:
-        sim = all_query_embs @ unique_embs.T                    # [N_q, V]
+        sim = all_query_embs @ unique_embs.T
 
     ranks = []
     for i in range(sim.size(0)):
@@ -234,10 +223,6 @@ def evaluate(model: ComposedVideoRetriever, loader: DataLoader,
     return metrics
 
 
-# ---------------------------------------------------------------------------
-#  Training loop
-# ---------------------------------------------------------------------------
-
 def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
                     epoch, global_step, rank=0, world_size=1):
     raw_model = model.module if isinstance(model, DDP) else model
@@ -251,17 +236,16 @@ def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
     for batch in pbar:
         target_feat = batch["target_feat"].to(device)
         target_mask = batch["target_mask"].to(device)
-        hn_feat = batch["hard_neg_feat"].to(device)    # [B, K, T, D]
-        hn_mask = batch["hard_neg_mask"].to(device)    # [B, K, T]
-        hn_valid = batch["hard_neg_valid"].to(device)  # [B, K]
+        hn_feat = batch["hard_neg_feat"].to(device)
+        hn_mask = batch["hard_neg_mask"].to(device)
+        hn_valid = batch["hard_neg_valid"].to(device)
 
         with autocast(enabled=cfg.fp16):
             query_emb = _encode_query_batch(raw_model, batch, device)
 
-            # encode positive + ONLY valid hard negative videos
             if hn_valid.any():
                 B, K, T, D = hn_feat.shape
-                valid_flat = hn_valid.reshape(-1)              # [B*K]
+                valid_flat = hn_valid.reshape(-1)
                 valid_hn_feat = hn_feat.reshape(B*K, T, D)[valid_flat]
                 valid_hn_mask = hn_mask.reshape(B*K, T)[valid_flat]
 
@@ -270,12 +254,12 @@ def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
                 all_vemb = raw_model.encode_video(all_vfeat, all_vmask)
 
                 video_emb = all_vemb[:B]
-                if all_vemb.dim() == 3:              # multi-event [N, E, D]
+                if all_vemb.dim() == 3:
                     _, num_ev, embed_dim = all_vemb.shape
                     hn_emb = all_vemb.new_zeros(B * K, num_ev, embed_dim)
                     hn_emb[valid_flat] = all_vemb[B:]
                     hn_emb = hn_emb.reshape(B, K, num_ev, embed_dim)
-                else:                                 # single-vector [N, D]
+                else:
                     embed_dim = all_vemb.size(-1)
                     hn_emb = all_vemb.new_zeros(B * K, embed_dim)
                     hn_emb[valid_flat] = all_vemb[B:]
@@ -284,7 +268,6 @@ def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
                 video_emb = raw_model.encode_video(target_feat, target_mask)
                 hn_emb, hn_valid = None, None
 
-            # gather across GPUs for larger negative pool
             if is_dist:
                 video_emb_all = gather_with_grad(video_emb)
                 query_emb_all = gather_with_grad(query_emb)
@@ -300,7 +283,6 @@ def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
                 labels_offset=labels_offset,
             )
 
-            # orthogonality regularization on event vectors
             if cfg.lambda_orth > 0 and video_emb.dim() == 3:
                 orth_loss = raw_model.orthogonality_loss(video_emb)
                 loss = loss + cfg.lambda_orth * orth_loss
@@ -333,10 +315,6 @@ def train_one_epoch(model, loader, optimizer, scheduler, scaler, cfg, device,
     avg = {k: v / max(n_batches, 1) for k, v in meter.items()}
     return avg, global_step
 
-
-# ---------------------------------------------------------------------------
-#  Main
-# ---------------------------------------------------------------------------
 
 def main():
     cfg = Config()
@@ -374,12 +352,10 @@ def main():
             else:
                 setattr(cfg, k, v)
 
-    # ---- distributed setup ----
     rank, local_rank, world_size = setup_distributed()
     is_main = (rank == 0)
     is_dist = (world_size > 1)
 
-    # ---- experiment directory ----
     if args.exp_name:
         exp_name = args.exp_name
     else:
@@ -393,7 +369,6 @@ def main():
         os.makedirs(cfg.output_dir, exist_ok=True)
         print(f"Experiment: {exp_name}")
         print(f"Output dir: {cfg.output_dir}")
-        # ---- persist run config for reproducibility ----
         from datetime import datetime
         run_meta = {
             "timestamp": datetime.now().isoformat(timespec="seconds"),
@@ -424,13 +399,11 @@ def main():
         if is_main:
             print("WARNING: No GPU detected, running on CPU (fp16 disabled)")
 
-    # ---- tokenizer (SigLIP mode only) ----
     use_pre_text = _use_pretrained_text_feat(cfg)
     tokenizer = None
     if not use_pre_text:
         tokenizer = AutoTokenizer.from_pretrained(cfg.text_encoder_path)
 
-    # ---- data ----
     if is_main:
         print("Loading data …")
     train_data = load_data(cfg.train_json)
@@ -459,7 +432,6 @@ def main():
                             shuffle=False, num_workers=cfg.num_workers,
                             pin_memory=True)
 
-    # ---- model ----
     if is_main:
         print("Building model …")
     model = ComposedVideoRetriever(
@@ -476,7 +448,6 @@ def main():
         use_pretrained_text_feat=use_pre_text,
     ).to(device)
 
-    # ---- resume from checkpoint (model weights only) ----
     if args.resume:
         assert os.path.isfile(args.resume), f"Checkpoint not found: {args.resume}"
         ckpt = torch.load(args.resume, map_location=device)
@@ -488,7 +459,6 @@ def main():
             print(f"  ✓ Loaded weights from {args.resume}  (epoch {prev_epoch}, R@1={prev_r1})")
         del ckpt
 
-    # ---- DDP wrapper ----
     if is_dist:
         model = DDP(model, device_ids=[local_rank],
                     find_unused_parameters=False)
@@ -498,14 +468,12 @@ def main():
     if is_main:
         print(f"Trainable parameters: {n_params:,}")
 
-    # ---- optimiser & scheduler ----
     optimizer = build_optimizer(model, cfg)
     total_steps = len(train_loader) * cfg.max_epochs
     warmup_steps = int(total_steps * cfg.warmup_ratio)
     scheduler = cosine_warmup_schedule(optimizer, warmup_steps, total_steps)
     scaler = GradScaler(enabled=cfg.fp16)
 
-    # ---- training ----
     best_r1 = 0.0
     best_epoch = None
     global_step = 0
@@ -531,7 +499,6 @@ def main():
                        f"time={elapsed:.0f}s")
             print(log_msg)
 
-        # ---- validation (rank 0 only) ----
         if is_main and epoch % cfg.eval_epoch_interval == 0:
             eval_model = raw_model
             metrics = evaluate(eval_model, val_loader, cfg.top_k, device)
