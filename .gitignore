@@ -1,0 +1,31 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Training outputs
+checkpoints/
+internfeatures-checkpoint/
+*.pt
+*.pth
+*.pth.tar
+*.ckpt
+*.safetensors
+
+# Features and generated data
+features/
+*-features/
+mined_train_hard_negatives.json
+eval_results*.json
+video_vid_list.json
+run_config.json
+best.json
+cmd.txt
+
+# Logs and local files
+*.log
+.DS_Store
+.env
+.env.*
