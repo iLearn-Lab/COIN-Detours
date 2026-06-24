@@ -1,6 +1,8 @@
-# Retrieval
+# COIN-Detours
 
-Minimal code release for composed video retrieval training, evaluation, and hard-negative mining.
+COIN-Detours: Context-Aware Retrieval and Generative Temporal Grounding for Instructional Video Detours.
+
+This repository contains the minimal code release for composed video retrieval training, evaluation, and hard-negative mining.
 
 ## Files
 
